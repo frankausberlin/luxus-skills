@@ -53,6 +53,8 @@ Statuswerte:
 
 Zusätzlich nennt die `AGENTS.md` `lupysta_version` und `contract_version` (D10). Der vollständige Workflow-Vertrag bleibt im Skill und wird nicht in jede `AGENTS.md` kopiert (Review R6).
 
+Die Tabelle ist eine menschen- und agentenlesbare Übersicht und zugleich die einzige Datenquelle für `just lupysta-status`. Sie enthält bewusst keine Datei- oder Dependency-Listen. Dateibesitz, Gruppen und Entfernungsschritte stehen in den Rezepten; vor der Verwendung prüft der Agent die dort genannten Projektdateien. Damit entsteht kein zweiter maschinenlesbarer Katalog.
+
 ## 4. Gemeinsame Infrastruktur und Besitz
 
 | Datei | Besitz | Regel beim Entfernen |
@@ -85,14 +87,17 @@ Nach der Entfernung gilt: Der Standardlauf bleibt grün, ohne Docker oder Provid
 
 ## 6. `just lupysta-status`
 
-Der Befehl liest die Feature-Tabelle aus `AGENTS.md` und prüft, ob die deklarierten Einstiegspunkte vorhanden sind:
+Der Befehl liest ausschließlich die Feature-Tabelle aus `AGENTS.md`. Er prüft:
 
-- Rezept im `Justfile` vorhanden,
-- genannte Dateien vorhanden,
-- Dependency-Group in `pyproject.toml` vorhanden (nur bei `available`),
-- Statuswert gültig.
+- Tabelle vorhanden, Pflichtspalten vollständig und Statuswert gültig,
+- bei `available`: Einstiegspunkt vorhanden (Rezept im `Justfile` bei `just …`, sonst der dokumentierte Befehl),
+- bei `removed`, `not-generated` und `legacy`: keine Fehler.
 
-Der Befehl **ändert nichts**, erkennt keine Features automatisch und repariert nichts. Ausgabe: eine Zeile je Feature mit `ok`, `missing` oder `stale`. Exitcode 0, wenn alle `available`-Features stimmen; 1 bei Abweichungen. `removed`, `not-generated` und `legacy` erzeugen keine Fehler.
+Dateien, Dependency-Groups und Entfernungsschritte prüft der Befehl nicht; sie stehen in den Rezepten und werden vom Agenten vor der Verwendung sowie durch `just check` geprüft. So bleibt die Tabelle die einzige Datenquelle, ohne einen zweiten Katalog oder Markdown-Parser mit eigener Pflegelogik einzuführen.
+
+Der Befehl **ändert nichts**, erkennt keine Features automatisch und repariert nichts. Ausgabe: eine Zeile je Feature mit `ok`, `missing` oder `invalid`. Exitcode 0, wenn alle `available`-Features stimmen; 1 bei Abweichungen.
+
+Eine spätere Erweiterung darf Datei- und Gruppenprüfungen ergänzen, muss dann aber Datenquelle, Prüfgrenzen und Pflegeaufwand ausdrücklich festlegen (D8).
 
 ## 7. Standardauswahl und Flags
 

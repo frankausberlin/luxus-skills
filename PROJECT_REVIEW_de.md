@@ -54,7 +54,7 @@ Priorität: **P0** blockiert Etappe 1 oder die Veröffentlichung, **P1** blockie
 | R5 | P0 | Tests/CI | Alte `test-pyinit.sh` nicht übernommen; keine CI, kein Link-Checker, kein Shellcheck im Repository. | Suite in Etappe 1 übernehmen, schnell/langsam trennen, CI mit Link-Check, Shellcheck und Fresh-Clone-Test. |
 | R6 | P1 | `AGENTS.md` | Voller Contract statt Feature-Tabelle; `lupysta_version` und `contract_version` fehlen; `just lupysta-status` fehlt. | Profil + Feature-Tabelle + lokale Regeln; Versionen ausweisen; Statusbefehl ergänzen (D8, D10). |
 | R7 | P1 | Feature-Entfernung | Keine Besitzregeln für gemeinsame pytest-, Justfile- und Doku-Infrastruktur. | Besitzmatrix und Entfernungscheckliste in [`PROJECT_FEATURES_de.md`](PROJECT_FEATURES_de.md) verbindlich machen. |
-| R8 | P1 | Refactor/Worktree | `refactor`/`merge`/Worktree/Baselines/Session-Dateien widersprechen sich. | Refactor im separaten Worktree oder Merge von jedem Checkout aus; Session-Dateien vor dem Entfernen übernehmen; `clean` erhält Baselines. |
+| R8 | P1 | Refactor/Worktree | `refactor`/`merge`/Worktree/Baselines/Session-Dateien widersprechen sich. | Refactor im separaten Worktree oder Merge von jedem Checkout aus; Worktree bei unsicherer Session-Übergabe stehen lassen; `clean` erhält Baselines. |
 | R9 | P1 | E2E/Agent | Marker allein verhindern keine Collection; Exitcode 5; optionale Abhängigkeiten fehlen im Standardlauf. | Collection-Gate über Root-`conftest.py`, Null-Test-Semantik, Preflight vor Docker/Provider (D7). |
 | R10 | P1 | Reproduzierbarkeit | Ungepinnte `uv add`-Auflösung, Netzwerkbedarf, implizites `layout_uv`, fehlende Voraussetzungen. | Getestete Versionen dokumentieren und pinnen, Voraussetzungen nennen, regelmäßiger CI-Lauf (D11). |
 | R11 | P1 | Koexistenz | Alter und neuer Skill können gleichzeitig installiert sein. | Migration und Uninstall dokumentieren, nicht beide installieren (D12). |
@@ -166,7 +166,7 @@ Priorität: **P0** blockiert Etappe 1 oder die Veröffentlichung, **P1** blockie
 
 **Auswirkung:** Nach `just refactor` ist `just merge` im selben Checkout nicht aufrufbar; der dokumentierte Ablauf funktioniert nur über die Fallback-Erkennung oder einen manuell angelegten Worktree. Session- und Journal-Dateien aus einem entfernten Worktree sind verloren, weil sie nicht versioniert sind. `clean` löscht die Vergleichsgrundlage.
 
-**Empfehlung:** Entweder `refactor` erzeugt selbst einen Worktree, oder `merge` akzeptiert jeden Checkout und ermittelt den Branch explizit. Vor dem Entfernen eines Worktrees `SESSION.md`/`JOURNAL.md` in den Haupt-Checkout übernehmen. `clean` schützt `.refactor/baselines/`. Merge-Rolle und Verantwortung für die Übergabe dokumentieren (D5).
+**Empfehlung:** Entweder `refactor` erzeugt selbst einen Worktree, oder `merge` akzeptiert jeden Checkout und ermittelt den Branch explizit. Vor dem Entfernen eines Worktrees prüfen, ob lokale `SESSION.md`/`JOURNAL.md` erhalten werden müssen; ohne nachweislich sichere Übergabe das Worktree stehen lassen, den Pfad nennen und vorhandene Dateien nie überschreiben (D5). `clean` schützt `.refactor/baselines/`.
 
 ### R9 – E2E/Agent: Marker allein genügen nicht (P1)
 

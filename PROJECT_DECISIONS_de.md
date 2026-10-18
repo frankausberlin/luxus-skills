@@ -24,7 +24,7 @@ Dieses Dokument ist ein schlankes Entscheidungslog (ADR-light). Jede Entscheidun
 | D2 | Unterstützte Plattformen | Open | Linux als Referenz; macOS nur mit CI- und Testabdeckung. Bis dahin `platforms: [linux]`. |
 | D3 | Lizenz | Open | Apache-2.0 passend zu `deen-lupysta`; Lion-MIT-Teile mit Attribution/`NOTICE`. Alternativ MIT nur nach sauberer Relizenzierung. |
 | D4 | Template-/Scaffolder-Mechanismus | Open | Vorlagen unter `resources/pyinit/` plus kleiner Renderer; Python-Scaffolder als optionaler Spike, nicht als Voraussetzung. |
-| D5 | Session-Zustand über Worktrees | Proposed | `SESSION.md`/`JOURNAL.md` im Projekt-Root und gitignored; `just merge` übernimmt sie vor dem Entfernen des Worktrees. Merge-Rolle klären. |
+| D5 | Session-Zustand über Worktrees | Proposed | `SESSION.md`/`JOURNAL.md` bleiben im Projekt-Root und gitignored. Der Merge verliert keine lokalen Inhalte: Ohne nachweislich sichere Übergabe bleibt das Worktree stehen; vorhandene Zieldateien werden nie überschrieben. |
 | D6 | Agent-Harness-Umfang | Proposed | Minimaler Kern (Richtwert ≤600 Zeilen) statt Lion-Port; Go/No-Go nach Etappe 4. |
 | D7 | E2E/Agent-Collection und Null-Tests | Proposed | Root-`tests/conftest.py` mit env-gesteuertem Ignore; keine echten Testdateien standardmäßig; Runner prüfen zuerst auf `test_*.py`; Exitcode 5 nur bei vorhandenen Dateien als Fehler. |
 | D8 | Feature-Modell und Statusbefehl | Proposed | Feature-Tabelle in `AGENTS.md`; `just lupysta-status` prüft deklarierte Einstiegspunkte, keine automatische Feature-Erkennung, keine Reparatur. |
@@ -104,17 +104,18 @@ Dieses Dokument ist ein schlankes Entscheidungslog (ADR-light). Jede Entscheidun
 
 **Status:** Proposed
 
-**Kontext:** `SESSION.md` und `JOURNAL.md` sind gitignored (`lupysta/scripts/luxuspythonstack.sh:448-449`) und liegen pro Worktree. `just refactor` arbeitet im aktuellen Checkout, `just merge` entfernt ein Worktree samt Branch (`:679-681`). Nicht versionierte Dateien gehen dabei verloren.
+**Kontext:** `SESSION.md` und `JOURNAL.md` sind gitignored (`lupysta/scripts/luxuspythonstack.sh:448-449`) und liegen pro Worktree. `just refactor` arbeitet im aktuellen Checkout, `just merge` entfernt ein Worktree samt Branch (`:679-681`). Nicht versionierte Dateien gehen dabei verloren. Ein pauschales Kopieren in den Haupt-Checkout kann dort vorhandene Session- oder Journal-Inhalte überschreiben.
 
 **Optionen**
 
-1. Dateien bleiben im Projekt-Root und gitignored; `just merge` kopiert sie vor dem Entfernen in den Haupt-Checkout.
-2. Dateien versionieren.
-3. Session-Zustand außerhalb des Repositories ablegen.
+1. Dateien bleiben im Projekt-Root und gitignored. Der Merge entfernt ein Worktree nur, wenn dabei keine lokalen Session- oder Journal-Inhalte verloren gehen; sonst bleibt das Worktree mit Pfad und Hinweis stehen.
+2. Dateien bleiben im Projekt-Root; der Merge kopiert sie automatisch und definiert dafür Zusammenführung, Konflikte, Sicherung und Schreibfehler.
+3. Dateien versionieren.
+4. Session-Zustand außerhalb des Repositories ablegen.
 
-**Empfehlung:** Option 1. Zusätzlich die Merge-Rolle dokumentieren: Wer führt den Merge aus, aus welchem Checkout, und wer prüft die übernommenen Dateien.
+**Empfehlung:** Option 1 für den ersten Stand. Vor dem Entfernen prüfen, ob zu erhaltende lokale Session-Dateien existieren. Solange keine nachweislich sichere Übergabe stattgefunden hat, das Worktree nicht entfernen, seinen Pfad nennen und den erfolgreichen Git-Merge getrennt von der ausstehenden lokalen Bereinigung melden. Vorhandene Dateien im Haupt-Checkout nie überschreiben und kein Force-Remove verwenden. Option 2 ist eine spätere Erweiterung und braucht eine eigene Spezifikation für Journal-Zusammenführung, gleiche Einträge, Session-Konflikte, Sicherung und Schreibfehler.
 
-**Konsequenzen:** Der Worktree bleibt wegwerfbar, ohne Wissen zu verlieren. Der Merge wird etwas komplexer und braucht einen Test. Option 2 erzeugt Rauschen im Verlauf; Option 3 bricht die einfache Projektlokalität.
+**Konsequenzen:** Ein Merge verliert keine lokalen Inhalte, ohne eine unausgereifte Zusammenführung zu versprechen. Im Konfliktfall bleibt ein Worktree sichtbar stehen; das ist beabsichtigt und wird verständlich gemeldet. Option 3 erzeugt Rauschen im Verlauf; Option 4 bricht die einfache Projektlokalität.
 
 ## D6 – Agent-Harness-Umfang
 
@@ -160,9 +161,9 @@ Dieses Dokument ist ein schlankes Entscheidungslog (ADR-light). Jede Entscheidun
 2. Automatische Erkennung über Dateisystem und Justfile.
 3. Keine Tabelle, nur Prosa in `AGENTS.md`.
 
-**Empfehlung:** Option 1. Statuswerte `available`, `removed`, `not-generated`, `legacy`; der Befehl prüft deklarierte Einstiegspunkte und meldet Abweichungen, ändert aber nichts (Exitcode 0/1).
+**Empfehlung:** Option 1. Statuswerte `available`, `removed`, `not-generated`, `legacy`; der Befehl prüft Tabellenformat, Statuswerte und deklarierte Einstiegspunkte und meldet Abweichungen, ändert aber nichts (Exitcode 0/1). Einzige Datenquelle ist die Feature-Tabelle; Datei-, Gruppen- und Entfernungsprüfungen bleiben bei den Rezepten und beim Agenten. Damit entsteht kein zweiter Katalog. Eine spätere Erweiterung um Datei- und Gruppenprüfungen braucht eine eigene Festlegung von Datenquelle und Pflegeaufwand.
 
-**Konsequenzen:** Agenten erkennen fehlende Features, ohne sie ungefragt wiederherzustellen. Option 2 ist fehleranfällig und widerspricht dem Scope.
+**Konsequenzen:** Agenten erkennen fehlende Features, ohne sie ungefragt wiederherzustellen. Die Tabelle bleibt kurz und pflegbar. Option 2 ist fehleranfällig und widerspricht dem Scope.
 
 ## D9 – Design-Report-Umfang
 

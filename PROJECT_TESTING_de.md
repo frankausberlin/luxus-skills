@@ -69,20 +69,24 @@ Das Root-`tests/conftest.py` steuert die Collection beider optionaler Suiten:
 ```python
 import os
 
-collect_ignore_glob = []
+collect_ignore = []
 if os.environ.get("LUPYSTA_E2E") != "1":
-    collect_ignore_glob.append("e2e/*")
+    collect_ignore.append("e2e")
 if os.environ.get("LUPYSTA_AGENT") != "1":
-    collect_ignore_glob.append("agent/*")
+    collect_ignore.append("agent")
 ```
+
+Die Pfade sind relativ zum Verzeichnis der `conftest.py`. Ausgeschlossen werden die **Verzeichnisse selbst**, nicht nur ihre Inhalte. Muster wie `e2e/*` genügen nicht: pytest betritt das Verzeichnis und lädt dessen `conftest.py`, bevor die Inhalte gefiltert werden. Ein optionaler Importfehler bricht dann den Standardlauf ab. Der Unterschied ist mit einem minimalen Projekt belegt (siehe `tests/test_collection_gate.py`); dort steht auch der Aufruf.
 
 Regeln:
 
 - `LUPYSTA_E2E=1` bzw. `LUPYSTA_AGENT=1` aktivieren die jeweilige Suite.
+- Die dedizierten Runner setzen genau eine dieser Variablen und adressieren explizit nur ihre Suite (z. B. `pytest tests/e2e`).
 - Marker `e2e` und `agent` gelten nur für die dedizierten Läufe und ergänzen das Gate, ersetzen es nicht.
 - Keine optionalen Importe (`docker`, `httpx`, Provider-SDKs) auf Modulebene. Importe erfolgen in Fixtures oder innerhalb der Tests.
 - Das Gate wirkt vor der Collection; `-m 'not e2e'` allein genügt nicht (Review R9).
-- `tests/conftest.py` gehört beiden Suiten. Es wird erst entfernt, wenn keine der beiden mehr vorhanden ist.
+- `tests/conftest.py` gehört beiden Suiten, bleibt frei von optionalen Abhängigkeiten und wird erst entfernt, wenn keine der beiden mehr vorhanden ist.
+- Collection-Fehler einer ausdrücklich aktivierten Suite werden nicht verschluckt.
 
 ## 5. Null-Test-Semantik
 
@@ -130,7 +134,7 @@ Fake-Provider-Tests decken Limits, Fehlerpfade und Report-Schema ohne Live-Model
 
 ## 8. Akzeptanzmatrix
 
-Die Matrix verbindet Etappen und Abnahmekriterien. „rc“ ist der erwartete Exitcode.
+Die Matrix verbindet Etappen und Abnahmekriterien. „rc“ ist der erwartete Exitcode. Die Matrix ist ein Zielbild: Noch nicht vorhandene Skripte und Rezepte sind als geplante Abnahme formuliert, nicht als bereits ausgeführte Nachweise. Bereits ausführbar ist derzeit `tests/test_collection_gate.py`.
 
 ### Etappe 1 – Eigenständiger Skill
 
@@ -156,7 +160,10 @@ Die Matrix verbindet Etappen und Abnahmekriterien. „rc“ ist der erwartete Ex
 | Feature-Tabelle vorhanden | `grep -q 'lupysta_version' /tmp/demo-app/AGENTS.md` | 0 |
 | Statusbefehl grün | `cd /tmp/demo-app && just lupysta-status` | 0 |
 | Statusbefehl erkennt Lücke | Rezept entfernen, dann `just lupysta-status` | 1 |
-| Keine Pflichtverweise | `! grep -rE 'ignore/|deen-lupysta|ai-stack|base-system' --include='*.md' .` | 0 |
+| Interne Links lösen sich auf | `bash scripts/check-links.sh` | 0 |
+| Defekter relativer Link wird erkannt | `bash tests/test-check-links.sh` (Fixture) | 0 |
+| Keine Pflichtdatei außerhalb des Checkouts | `bash tests/fresh-clone.sh` | 0 |
+| Collection-Gate | `uvx --from pytest pytest tests/test_collection_gate.py` | 0 |
 
 ### Etappe 3 – Design/Refactor
 
@@ -168,6 +175,15 @@ Die Matrix verbindet Etappen und Abnahmekriterien. „rc“ ist der erwartete Ex
 | Refactor-Vorbereitung | `just refactor demo` | 0 |
 | Refactor bei dirty tree | `touch src/change.py && just refactor demo2` | 1 |
 | Clean erhält Baselines | `just clean && test -d .refactor/baselines` | 0 |
+
+Session-Übergabe (geplant, D5; derzeit nicht implementiert):
+
+| Fall | Erwartetes Verhalten |
+| --- | --- |
+| Worktree enthält `SESSION.md`/`JOURNAL.md`, sichere Übergabe nicht möglich | Git-Merge wird gemeldet; Worktree bleibt mit Pfad und Hinweis stehen. |
+| Worktree enthält keine Session-Dateien | Worktree und Branch werden nach dem Merge entfernt. |
+| Gleichnamige Dateien mit unterschiedlichem Inhalt | Dateien im Haupt-Checkout bleiben unverändert; Konflikt wird gemeldet, Worktree bleibt. |
+| Schreibfehler bei einer späteren automatischen Übergabe | Fehler wird gemeldet; Worktree bleibt; kein Force-Remove. |
 
 ### Etappe 4 – E2E
 
