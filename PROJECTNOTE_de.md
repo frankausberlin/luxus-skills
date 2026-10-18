@@ -19,6 +19,15 @@ hier soll der skill optimiert werden. dazu sollte zuerst analysiert werden wo ei
 * in references/ sollten auch e2e-agent-testing.md und eine rate-and-refactor.md rein
 * der python-spezifische teil aus deen-lupysta/base-system und deen-lupysta/eco-system sollte als lupysta-setup.md in references. betroffene mds: base-system/07-zsh2-antidote-p10k.md und eco-system/02-python.md
 * damit die sache luxuriös wird sollte auch noch das zsh-setup beschrieben werden. und alles in der form, das ein agent es als anleitung zur einrichtung gebrauchen kann und es gleichzeitig dem menschen als Beschreibung dient.
+* im moment gibt es in den foldern e2e/ und agentic/ (der soll in agent/ umbenannt werden) jeweils eine README.md. die dateien sollen raus und einfach durch kopien der entsprechenden dateien aus dem reference-folder ersetzt werden. auch hier nochmal doppelnutzen, für mensch und agent.
+(aber hier bin ich mir auch nicht sicher, ob nicht zu viel projekt-spezisisches in den dateien ist, das müssen wir noch klären, da kannst du einen vorschlag machen)
 
-du sollst dir mal das lion projekt und den luxuspythonstack anschauen, das vorhaben anlysieren und mir deine meinung und vorschläge sagen, bevor du den plan erstellst. lass uns brainstormen
+was ich bisher gemacht habe:
+
+repo angelegt, darin lupysta-folder für den skill
+ignore/folder mit links zu deen-lupyst und lion repo
+SKILL.md und references/ aus dem alten skill übernommen
+scripts/ im skill-folder angelegt und luxuspythonsstack.sh hin kopiert
+
+
 
