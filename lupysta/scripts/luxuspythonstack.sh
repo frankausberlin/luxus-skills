@@ -1,0 +1,1383 @@
+# _LUXUS_SCRIPT_DIR — absolute path to the directory containing this sourced script
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+    _LUXUS_SOURCE="${BASH_SOURCE[0]}"
+elif [ -n "${ZSH_VERSION:-}" ]; then
+    eval '_LUXUS_SOURCE="${(%):-%x}"'
+else
+    _LUXUS_SOURCE="$0"
+fi
+_LUXUS_REAL_SOURCE="$(readlink -f "$_LUXUS_SOURCE" 2>/dev/null || printf '%s\n' "$_LUXUS_SOURCE")"
+_LUXUS_SCRIPT_DIR="$(cd "$(dirname "$_LUXUS_REAL_SOURCE")" && pwd)"
+unset _LUXUS_SOURCE _LUXUS_REAL_SOURCE
+
+
+
+
+
+# ─── pyinit ───────────────────────────────────────────────────────────────────
+# Luxury Python Project Initializer — initialize a new uv-based Python project.
+#
+# pyinit is ONLY a new-project initializer. It never updates, repairs, merges, or
+# migrates an existing project. The target directory must be empty or not exist.
+#
+# Usage:
+#   pyinit                            # app in the current directory
+#   pyinit my-project                 # app in a new directory
+#   pyinit my-lib --lib               # library in a new directory
+#   pyinit my-app --cli               # app with a Typer CLI reference
+#   pyinit my-project --python 3.11   # specify Python version
+#   pyinit --help                     # show help
+pyinit() {
+    # ─── Argument parsing (no side effects) ──────────────────────────────────
+    local _dir="."
+    local _type="app"
+    local _cli=0
+    local _py_version="3.12"
+    local _saw_dir=0
+    local _arg
+
+    while [[ $# -gt 0 ]]; do
+        _arg="$1"
+        case "$_arg" in
+            --help|-h)
+                cat <<'PYINIT_HELP'
+Usage: pyinit [OPTIONS] [DIRECTORY]
+
+Initialize a new uv-based Python project in DIRECTORY (default: current
+directory). The target directory must be empty or not exist yet.
+
+Options:
+  --lib            Create a library instead of an application (default: app)
+  --cli            Add a Typer CLI reference to an application (app only)
+  --python X.Y     Python version, e.g. 3.12 (default: 3.12)
+  --help           Show this help and exit
+
+Examples:
+  pyinit                          # app in the current directory
+  pyinit my-project               # app in a new directory
+  pyinit my-lib --lib             # library in a new directory
+  pyinit my-app --cli             # app with a generated CLI reference
+  pyinit my-project --python 3.11
+  pyinit --python=3.11 my-project
+PYINIT_HELP
+                return 0
+                ;;
+            --lib)
+                _type="lib"
+                ;;
+            --cli)
+                _cli=1
+                ;;
+            --python)
+                if [[ $# -lt 2 ]]; then
+                    echo "Error: --python requires a value (e.g. --python 3.12)." >&2
+                    return 1
+                fi
+                _py_version="$2"
+                shift
+                ;;
+            --python=*)
+                _py_version="${_arg#--python=}"
+                ;;
+            -*)
+                echo "Error: unknown option '$_arg'." >&2
+                echo "       Run 'pyinit --help' for usage." >&2
+                return 1
+                ;;
+            *)
+                if [[ $_saw_dir -eq 1 ]]; then
+                    echo "Error: too many arguments: '$_arg' (only one DIRECTORY is allowed)." >&2
+                    return 1
+                fi
+                _dir="$_arg"
+                _saw_dir=1
+                ;;
+        esac
+        shift
+    done
+
+    # ─── Option combination guards ───────────────────────────────────────────
+    if [[ "$_type" == "lib" && $_cli -eq 1 ]]; then
+        echo "Error: --cli is only valid for applications, not libraries." >&2
+        return 1
+    fi
+
+    # ─── Validate Python version format (X.Y) ────────────────────────────────
+    if [[ ! "$_py_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo "Error: invalid Python version '$_py_version' (expected X.Y, e.g. 3.12)." >&2
+        return 1
+    fi
+
+    # ─── Derive and validate package name ────────────────────────────────────
+    local _target_name _package_name
+    if [[ "$_dir" == "." ]]; then
+        _target_name="$(basename "$PWD")"
+    else
+        _target_name="$(basename "$_dir")"
+    fi
+    _package_name="${_target_name//-/_}"
+
+    if [[ ! "$_package_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        echo "Error: package name '$_package_name' (derived from directory '$_target_name')" >&2
+        echo "       is not a valid Python identifier." >&2
+        echo "       Project directories must use only [A-Za-z0-9_-] and no leading digit." >&2
+        return 1
+    fi
+
+    case "$_package_name" in
+        False|None|True|and|as|assert|async|await|break|class|continue|def|del|elif|else|except|finally|for|from|global|if|import|in|is|lambda|nonlocal|not|or|pass|raise|return|try|while|with|yield|match|case)
+            echo "Error: '$_package_name' is a Python keyword and cannot be a package name." >&2
+            return 1
+            ;;
+    esac
+
+    # ─── Require an empty (or absent) target ─────────────────────────────────
+    if [[ -e "$_dir" ]]; then
+        if [[ ! -d "$_dir" ]]; then
+            echo "Error: target '$_dir' exists but is not a directory." >&2
+            return 1
+        fi
+        if [[ -n "$(ls -A "$_dir" 2>/dev/null)" ]]; then
+            echo "Error: target directory '$_dir' is not empty." >&2
+            echo "       pyinit only initializes empty or new directories." >&2
+            echo "       Review and remove existing contents yourself, then re-run." >&2
+            return 1
+        fi
+    fi
+
+    # ─── Require tools and resolve local templates before any write ──────────
+    local _tool
+    for _tool in uv just git; do
+        if ! command -v "$_tool" >/dev/null 2>&1; then
+            echo "Error: required tool '$_tool' is not installed or not on PATH." >&2
+            return 1
+        fi
+    done
+
+    if ! command -v awk >/dev/null 2>&1; then
+        echo "Error: required tool 'awk' is not installed or not on PATH." >&2
+        return 1
+    fi
+
+    local _stack_doc="${_LUXUS_SCRIPT_DIR}/../luxuspythonstack.md"
+    if [[ ! -f "$_stack_doc" ]]; then
+        echo "Error: canonical stack documentation not found at '$_stack_doc'." >&2
+        return 1
+    fi
+
+    local _contract
+    _contract="$(awk '
+        BEGIN {
+            begin = "<!-- AGENTS_EXPORT_BEGIN: stack-contract-v1 -->"
+            end = "<!-- AGENTS_EXPORT_END: stack-contract-v1 -->"
+            blocks = 0
+            in_block = 0
+            saw_end = 0
+            has_content = 0
+            invalid = 0
+        }
+        $0 == begin {
+            if (in_block || ++blocks > 1) invalid = 1
+            in_block = 1
+            next
+        }
+        $0 == end {
+            if (!in_block || saw_end) invalid = 1
+            in_block = 0
+            saw_end = 1
+            next
+        }
+        in_block {
+            if ($0 !~ /^[[:space:]]*$/) has_content = 1
+            print
+        }
+        END {
+            if (blocks != 1 || !saw_end || in_block || !has_content || invalid) exit 1
+        }
+    ' "$_stack_doc")"
+    if [[ $? -ne 0 || -z "$_contract" ]]; then
+        echo "Error: canonical AGENTS export block is missing or malformed in '$_stack_doc'." >&2
+        return 1
+    fi
+
+    echo -e "\e[34m💎 Initializing $_type project '$_target_name' (Python $_py_version)...\e[0m"
+
+    # ─── Scaffold in a subshell so the caller's working directory is preserved
+    #     on any failure, and UV_PYTHON_PREFERENCE never leaks to the caller.
+    (
+        _die() {
+            printf '%s\n' "Error: $*" >&2
+            exit 1
+        }
+
+        export UV_PYTHON_PREFERENCE=only-managed
+
+        if [[ "$_dir" != "." ]]; then
+            mkdir -p "$_dir" || _die "cannot create directory '$_dir'"
+            cd "$_dir" || _die "cannot enter directory '$_dir'"
+        fi
+
+        local PROJECT_NAME PACKAGE_NAME
+        PROJECT_NAME="$(basename "$PWD")"
+        PACKAGE_NAME="${PROJECT_NAME//-/_}"
+
+        # ─── Step 1: uv init (package layout for apps and libraries) ─────────
+        if [[ "$_type" == "app" ]]; then
+            uv init --app --package --name "$PROJECT_NAME" --python "$_py_version" --vcs none \
+                || _die "uv init failed"
+        else
+            uv init --lib --name "$PROJECT_NAME" --python "$_py_version" --vcs none \
+                || _die "uv init failed"
+        fi
+
+        # ─── Step 2: dev dependencies (before appending [tool.*]) ────────────
+        uv add --dev ruff pytest pytest-cov basedpyright colorlog bump-my-version pre-commit pip-audit \
+            radon vulture \
+            || _die "adding dev dependencies failed"
+        if [[ "$_type" == "lib" ]]; then
+            uv add --dev "mkdocs-material" "mkdocstrings[python]" \
+                || _die "adding documentation dependencies failed"
+        fi
+        if [[ "$_type" == "app" && $_cli -eq 1 ]]; then
+            uv add typer || _die "adding the typer runtime dependency failed"
+        fi
+
+        # ─── Step 3: patch pyproject (entry point + version marker) ──────────
+        if [[ "$_type" == "app" ]]; then
+            sed -i "s|\"${PACKAGE_NAME}:main\"|\"${PACKAGE_NAME}.main:main\"|" pyproject.toml \
+                || _die "patching [project.scripts] failed"
+        fi
+        sed -i 's/^version = "0\.1\.0"$/version = "0.1.0"  # project-version/' pyproject.toml \
+            || _die "patching version marker failed"
+
+        # ─── Step 4: package source files ─────────────────────────────────────
+        cat > "src/$PACKAGE_NAME/__init__.py" <<PYINIT_INIT
+"""${PROJECT_NAME} package."""
+
+__version__ = "0.1.0"
+PYINIT_INIT
+
+        if [[ "$_type" == "app" ]]; then
+            if [[ $_cli -eq 1 ]]; then
+                cat > "src/$PACKAGE_NAME/cli.py" <<PYINIT_CLI
+"""Command-line interface for ${PROJECT_NAME}."""
+
+import typer
+
+app = typer.Typer(
+    name="${PROJECT_NAME}",
+    help="Command-line interface for ${PROJECT_NAME}.",
+    no_args_is_help=True,
+)
+
+
+@app.command()
+def hello(name: str = "world") -> None:
+    """Print a greeting."""
+    typer.echo(f"Hello, {name}!")
+
+
+if __name__ == "__main__":
+    app()
+PYINIT_CLI
+                cat > "src/$PACKAGE_NAME/main.py" <<PYINIT_MAIN_CLI
+"""Entry point for ${PROJECT_NAME}."""
+
+from ${PACKAGE_NAME}.cli import app
+
+
+def main() -> None:
+    """Run the ${PROJECT_NAME} command-line interface."""
+    app()
+
+
+if __name__ == "__main__":
+    main()
+PYINIT_MAIN_CLI
+            else
+                cat > "src/$PACKAGE_NAME/main.py" <<PYINIT_MAIN
+"""Entry point for ${PROJECT_NAME}."""
+
+
+def main() -> None:
+    """Run the ${PROJECT_NAME} application."""
+    print("Hello from ${PROJECT_NAME}!")
+
+
+if __name__ == "__main__":
+    main()
+PYINIT_MAIN
+            fi
+        fi
+
+        # ─── Step 5: tests ────────────────────────────────────────────────────
+        mkdir -p tests
+        if [[ "$_type" == "app" ]]; then
+            if [[ $_cli -eq 1 ]]; then
+                cat > tests/test_smoke.py <<PYINIT_APP_CLI_TEST
+"""Smoke test for the ${PROJECT_NAME} application."""
+
+import sys
+
+import pytest
+from typer.testing import CliRunner
+
+from ${PACKAGE_NAME} import main as main_module
+from ${PACKAGE_NAME}.cli import app
+
+runner = CliRunner()
+
+
+def test_cli_hello() -> None:
+    """Run the CLI with an explicit name."""
+    result = runner.invoke(app, ["--name", "tester"])
+    assert result.exit_code == 0
+    assert "Hello, tester!" in result.output
+
+
+def test_entry_point_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run the console entry point with a patched command line."""
+    monkeypatch.setattr(sys, "argv", ["${PROJECT_NAME}", "--name", "tester"])
+    with pytest.raises(SystemExit) as excinfo:
+        main_module.main()
+    assert excinfo.value.code == 0
+PYINIT_APP_CLI_TEST
+            else
+                cat > tests/test_smoke.py <<PYINIT_APP_TEST
+"""Smoke test for the ${PROJECT_NAME} application."""
+
+from ${PACKAGE_NAME}.main import main
+
+
+def test_main() -> None:
+    """Run the application entry point."""
+    main()
+PYINIT_APP_TEST
+            fi
+        else
+            cat > tests/test_smoke.py <<PYINIT_LIB_TEST
+"""Smoke test for the ${PROJECT_NAME} library."""
+
+import ${PACKAGE_NAME}
+
+
+def test_package_version() -> None:
+    """Verify the package exposes its version."""
+    assert ${PACKAGE_NAME}.__version__ == "0.1.0"
+PYINIT_LIB_TEST
+        fi
+
+        # ─── Step 6: pyproject tool config ────────────────────────────────────
+        cat >> pyproject.toml <<PYINIT_TOOLS
+
+[tool.ruff]
+target-version = "py${_py_version//./}"
+line-length = 120
+extend-exclude = [".kilo"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "D", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.basedpyright]
+pythonVersion = "${_py_version}"
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "-q"]
+
+[tool.coverage.report]
+fail_under = 90
+exclude_also = [
+    "if __name__ == .__main__.:",
+]
+
+[tool.bumpversion]
+current_version = "0.1.0"
+commit = true
+tag = true
+tag_name = "v{new_version}"
+message = "chore: bump version from {current_version} to {new_version}"
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"  # project-version'
+replace = 'version = "{new_version}"  # project-version'
+
+[[tool.bumpversion.files]]
+filename = "src/${PACKAGE_NAME}/__init__.py"
+search = '__version__ = "{current_version}"'
+replace = '__version__ = "{new_version}"'
+PYINIT_TOOLS
+
+        # ─── Step 7: .gitignore (local template, deterministic) ──────────────
+        cat > .gitignore <<'PYINIT_GITIGNORE'
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+build/
+dist/
+
+# Environments & secrets
+.venv/
+.env
+
+# Tool caches
+.direnv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Documentation build output (library projects)
+site/
+
+# Refactoring artifacts (generated)
+.refactor/
+
+# Agent session files (volatile)
+SESSION.md
+JOURNAL.md
+
+# Agent artifacts
+.kilo/
+
+# Freestyle scratch space
+ignore/
+PYINIT_GITIGNORE
+
+        # ─── Step 8: VS Code configuration ────────────────────────────────────
+        mkdir -p .vscode
+        cat > .vscode/settings.json <<'PYINIT_VSCODE_SETTINGS'
+{
+    // basedpyright is the single Python language server for this project.
+    // Disable the Microsoft Python language server (Pylance) so both do not
+    // run at once and produce duplicate, conflicting diagnostics.
+    "python.languageServer": "None",
+    "python.analysis.typeCheckingMode": "off",
+    "editor.formatOnSave": true,
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff"
+    },
+    "editor.codeActionsOnSave": {
+        "source.fixAll.ruff": "always",
+        "source.organizeImports.ruff": "always"
+    },
+    "python.testing.pytestEnabled": true,
+    "python.testing.pytestArgs": [],
+    "python.terminal.activateEnvironment": true
+}
+PYINIT_VSCODE_SETTINGS
+
+        cat > .vscode/launch.json <<'PYINIT_LAUNCH'
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "Python: Pytest",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["-s", "${file}"],
+            "console": "integratedTerminal"
+        }
+    ]
+}
+PYINIT_LAUNCH
+
+        cat > .vscode/extensions.json <<'PYINIT_EXTENSIONS'
+{
+    "recommendations": [
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "detachhead.basedpyright"
+    ]
+}
+PYINIT_EXTENSIONS
+
+        # ─── Step 9: direnv (.envrc, no automatic allow) ─────────────────────
+        cat > .envrc <<'PYINIT_ENVRC'
+# Deactivate any active non-base Conda environment to prevent variable leakage
+if [[ -n "$CONDA_DEFAULT_ENV" && "$CONDA_DEFAULT_ENV" != "base" ]]; then
+    conda deactivate 2>/dev/null || true
+fi
+watch_file uv.lock
+layout uv  # requires the layout_uv() function in ~/.config/direnv/direnvrc
+PYINIT_ENVRC
+
+        # ─── Step 10: Justfile ────────────────────────────────────────────────
+        cat > Justfile <<'PYINIT_JUST'
+set shell := ["bash", "-uc"]
+
+# Run tests with coverage report
+test:
+    uv run pytest --cov=src --cov-report=term-missing
+
+# Run linters and type checker (find errors)
+lint:
+    uv run ruff check .
+    uv run ruff format --check .
+    uv run basedpyright
+
+# Type check only
+typecheck:
+    uv run basedpyright
+
+# Fix linting issues
+fix:
+    uv run ruff check --fix .
+    uv run ruff format .
+
+# Remove local caches and generated artifacts (keeps .venv, sources and session files)
+clean:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rm -rf .pytest_cache .ruff_cache .mypy_cache .coverage htmlcov .refactor site
+    rm -rf build dist ./*.egg-info
+    find . -path ./.venv -prune -o -path ./.git -prune -o -type d -name __pycache__ -print -exec rm -rf {} +
+    find . -path ./.venv -prune -o -path ./.git -prune -o -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -exec rm -f {} +
+    echo "Cleaned caches and generated artifacts (kept .venv, SESSION.md and JOURNAL.md)."
+
+# Audit dependencies for known security vulnerabilities
+audit:
+    uv run pip-audit
+
+# Bump version — requires a clean working tree (patch | minor | major)
+bump part="patch":
+    #!/usr/bin/env bash
+    if [ -n "$(git status --porcelain)" ]; then
+        echo "Error: Working tree is dirty." >&2
+        exit 1
+    fi
+    uv run bump-my-version bump {{part}}
+
+# Write design metrics to .refactor/ (report only; never fails on findings)
+rate-design:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    mkdir -p .refactor
+    uv run radon cc  src --json > .refactor/radon-cc.json  || { echo "radon cc failed"  >&2; exit 2; }
+    uv run radon mi  src --json > .refactor/radon-mi.json  || { echo "radon mi failed"  >&2; exit 2; }
+    uv run radon raw src --json > .refactor/radon-raw.json || { echo "radon raw failed" >&2; exit 2; }
+    vrc=0
+    uv run vulture src tests --min-confidence 60 > .refactor/vulture.txt || vrc=$?
+    # vulture exit code 3 == findings (expected); 1/2 == error
+    if [ "$vrc" -ne 0 ] && [ "$vrc" -ne 3 ]; then echo "vulture failed ($vrc)" >&2; exit 2; fi
+    {
+        echo "# Design report"
+        echo
+        echo "- revision: $(git rev-parse --short HEAD 2>/dev/null || echo n/a)"
+        echo "- date: $(date -u +%FT%TZ)"
+        echo "- python: $(uv run python -V 2>/dev/null)"
+        echo
+        echo "## Vulture (advisory – NOT proof of dead code)"
+        echo '```'
+        cat .refactor/vulture.txt
+        echo '```'
+        echo
+        echo "## Radon cc / mi / raw"
+        echo "Raw JSON: .refactor/radon-cc.json, radon-mi.json, radon-raw.json"
+    } > .refactor/report.md
+    echo "Report: .refactor/report.md"
+
+# Prepare a refactoring session: preflight, baseline report, new branch. Changes no code.
+refactor name="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "$(git status --porcelain)" ]; then
+        echo "Error: working tree is dirty; commit or stash first." >&2
+        exit 1
+    fi
+    just check
+    just rate-design
+    slug="{{name}}"
+    slug="${slug:-$(date -u +%Y%m%d-%H%M%S)}"
+    branch="refactor/${slug}"
+    git switch -c "$branch"
+    echo "Branch '$branch' created. Baseline in .refactor/."
+    echo "Proceed with the 'refactoring' skill; this recipe does not refactor."
+
+# Fast-forward main to <branch> (auto-detected when omitted), then clean up its worktree and branch
+merge branch="" target="main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "$(git branch --show-current)" != "{{target}}" ]; then
+        echo "merge: run this from '{{target}}'" >&2
+        exit 1
+    fi
+    if [ -n "$(git status --porcelain)" ]; then
+        echo "merge: working tree is dirty" >&2
+        exit 1
+    fi
+
+    branch="{{branch}}"
+    if [ -z "$branch" ]; then
+        # The feature branch is the one checked out in another worktree.
+        mapfile -t candidates < <(
+            git worktree list --porcelain \
+                | awk '/^branch / { print substr($2, 12) }' \
+                | grep -vx '{{target}}' || true
+        )
+        # No worktree: fall back to the only local branch not yet merged.
+        if [ "${#candidates[@]}" -eq 0 ]; then
+            mapfile -t candidates < <(
+                git branch --no-merged '{{target}}' --format='%(refname:short)' || true
+            )
+        fi
+        if [ "${#candidates[@]}" -eq 0 ]; then
+            echo "merge: nothing to merge" >&2
+            exit 1
+        fi
+        if [ "${#candidates[@]}" -gt 1 ]; then
+            echo "merge: several branches to choose from:" >&2
+            printf '  %s\n' "${candidates[@]}" >&2
+            echo "merge: run 'just merge <branch>'" >&2
+            exit 1
+        fi
+        branch="${candidates[0]}"
+    fi
+    if [ "$branch" = "{{target}}" ]; then
+        echo "merge: refusing to merge '{{target}}' into itself" >&2
+        exit 1
+    fi
+
+    if git remote get-url origin >/dev/null 2>&1; then
+        git fetch origin
+        # Refuse now when publishing would later be rejected as non-fast-forward.
+        if git rev-parse --verify --quiet "refs/remotes/origin/{{target}}" >/dev/null; then
+            if ! git merge-base --is-ancestor "refs/remotes/origin/{{target}}" HEAD; then
+                echo "merge: origin/{{target}} is not an ancestor of {{target}}; reconcile before merging" >&2
+                exit 1
+            fi
+        fi
+    fi
+    if ! git merge --ff-only "$branch"; then
+        echo "merge: '$branch' cannot be fast-forwarded; '{{target}}' has diverged" >&2
+        exit 1
+    fi
+    worktree_path="$(
+        git worktree list --porcelain | awk -v ref="refs/heads/$branch" \
+            '/^worktree / { wt = substr($0, 10) } /^branch / && $2 == ref { print wt; exit }'
+    )"
+    if [ -n "$worktree_path" ]; then
+        git worktree remove "$worktree_path"
+    fi
+    git branch -d "$branch"
+    echo "merge: '$branch' merged into '{{target}}' and cleaned up; publish with 'git push origin {{target}}'"
+PYINIT_JUST
+
+        # ─── Step 10b: quality gate (docs-check only when the recipe exists) ──
+        {
+            echo ""
+            if [[ "$_type" == "lib" || $_cli -eq 1 ]]; then
+                echo "# Full local quality gate (lint + typecheck + docs + tests)"
+            else
+                echo "# Full local quality gate (lint + typecheck + tests)"
+            fi
+            echo "check:"
+            echo "    uv run ruff check ."
+            echo "    uv run ruff format --check ."
+            echo "    uv run basedpyright"
+            if [[ "$_type" == "lib" || $_cli -eq 1 ]]; then
+                echo "    just docs-check"
+            fi
+            echo "    uv run pytest --cov=src --cov-report=term-missing"
+        } >> Justfile
+
+        if [[ "$_type" == "app" ]]; then
+            cat >> Justfile <<PYINIT_JUST_RUN
+
+# Run the installed command
+run:
+    uv run ${PROJECT_NAME}
+PYINIT_JUST_RUN
+        fi
+
+        # ─── Step 11: GitHub Actions ──────────────────────────────────────────
+        mkdir -p .github/workflows
+        cat > .github/workflows/ci.yml <<'PYINIT_CI'
+name: CI
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - uses: extractions/setup-just@v2
+      - run: uv sync --locked --dev
+      - run: just check
+      - run: uv run pip-audit
+PYINIT_CI
+
+        if [[ "$_type" == "lib" ]]; then
+            cat > .github/workflows/release.yml <<'PYINIT_RELEASE'
+name: Release
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - uses: extractions/setup-just@v2
+      - run: uv sync --locked --dev
+      - run: just check
+  publish:
+    runs-on: ubuntu-latest
+    needs: check
+    permissions:
+      id-token: write   # required for PyPI Trusted Publishing (OIDC)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv build
+      - run: uv publish   # configure a PyPI Trusted Publisher before first release
+PYINIT_RELEASE
+        fi
+
+        # ─── Step 12: AGENTS.md from canonical stack contract ─────────────────
+        local PROJECT_TYPE ENTRY_DETAILS
+        PROJECT_TYPE="$_type"
+        if [[ "$PROJECT_TYPE" == "app" ]]; then
+            ENTRY_DETAILS="Entry point: \`src/${PACKAGE_NAME}/main.py:main\` (run with \`just run\`)."
+        else
+            ENTRY_DETAILS="Public API: \`src/${PACKAGE_NAME}/__init__.py\`; typed package marker: \`src/${PACKAGE_NAME}/py.typed\`."
+        fi
+        cat > AGENTS.md <<PYINIT_AGENTS
+# AGENTS.md - ${PROJECT_NAME}
+
+Generated once by \`pyinit\` from \`stack-contract-v1\`. Existing projects are not updated automatically; keep local guidance in the project-specific section.
+
+## Project Profile
+
+- Project name: \`${PROJECT_NAME}\`
+- Package name: \`${PACKAGE_NAME}\`
+- Project type: ${PROJECT_TYPE}
+- Python version: \`${_py_version}\`
+- Source path: \`src/${PACKAGE_NAME}/\`
+- Tests: \`tests/\`
+- ${ENTRY_DETAILS}
+
+<!-- AGENTS_MANAGED_BEGIN: stack-contract-v1 -->
+${_contract}
+<!-- AGENTS_MANAGED_END: stack-contract-v1 -->
+
+## Project-Specific Rules
+
+<!-- Add project-local rules below. Keep the managed contract unchanged. -->
+PYINIT_AGENTS
+
+        # ─── Step 13: session and project documents ──────────────────────────
+        cat > SESSION.md <<'PYINIT_SESSION'
+Summary of the last session. Will be overwritten by every session.
+PYINIT_SESSION
+
+        cat > JOURNAL.md <<'PYINIT_JOURNAL'
+Session history: past sessions are appended here (latest at the end).
+PYINIT_JOURNAL
+
+        local _docs_gate="" _readme_docs="" _check_desc=""
+        if [[ "$_type" == "lib" || $_cli -eq 1 ]]; then
+            _check_desc="full gate (lint + typecheck + docs + tests)"
+        else
+            _check_desc="full gate (lint + typecheck + tests)"
+        fi
+        if [[ "$_type" == "lib" ]]; then
+            _docs_gate=$'just docs         # build the documentation\njust docs-check   # verify the generated documentation is current\njust docs-serve   # live preview\n'
+        elif [[ $_cli -eq 1 ]]; then
+            _docs_gate=$'just docs         # regenerate docs/reference/cli.md\njust docs-check   # verify the generated CLI reference is current\n'
+        fi
+        if [[ -n "$_docs_gate" ]]; then
+            _readme_docs=$'## Documentation\n\n```bash\n'"${_docs_gate}"$'```\n\n'
+        fi
+
+        cat > README.md <<PYINIT_README
+# ${PROJECT_NAME}
+
+## Getting Started
+
+\`\`\`bash
+uv sync
+just check
+\`\`\`
+
+## Development
+
+\`\`\`bash
+just test        # run tests
+just lint        # lint + type check
+just fix         # auto-fix lint issues
+just clean       # remove caches and generated artifacts
+just rate-design # design metrics → .refactor/ (report only)
+just refactor    # prepare a refactoring session
+just merge       # fast-forward main to a branch, clean up its worktree/branch (no push)
+just check       # full quality gate
+\`\`\`
+
+${_readme_docs}## Release
+
+\`\`\`bash
+just bump patch   # 0.1.0 → 0.1.1
+git push origin main --tags
+\`\`\`
+
+See [AGENTS.md](AGENTS.md) for AI agent guidelines.
+PYINIT_README
+
+        cat > .editorconfig <<'PYINIT_EDITORCONFIG'
+root = true
+
+[*]
+indent_style = space
+indent_size = 4
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.{yml,yaml,toml,json}]
+indent_size = 2
+
+[Makefile]
+indent_style = tab
+PYINIT_EDITORCONFIG
+
+        cat > CONTRIBUTING.md <<PYINIT_CONTRIBUTING
+# Contributing to ${PROJECT_NAME}
+
+## Development Setup
+
+\`\`\`bash
+git clone <repo-url>
+cd ${PROJECT_NAME}
+direnv allow      # auto-activates .venv (or run: source .venv/bin/activate)
+uv sync           # install all dependencies
+\`\`\`
+
+## Workflow
+
+1. Create a branch, preferably in a separate worktree:
+   \`git worktree add ../${PROJECT_NAME}-feature -b feat/my-feature\`
+2. Make your changes
+3. Run the quality gate: \`just check\`
+4. Commit: \`git add -A && git commit -m "feat: ..."\`
+5. From the main checkout, merge locally: \`just merge feat/my-feature\`
+   (fast-forward only; it removes the branch's worktree and deletes the branch)
+6. Publishing is a maintainer step: review local \`main\` with
+   \`git log --oneline origin/main..main\` and \`git diff origin/main..main\`, then
+   \`git push origin main\`
+
+## Quality Gate
+
+\`\`\`bash
+just lint         # ruff + basedpyright
+just typecheck    # type checking only
+just test         # pytest with coverage
+just clean        # remove caches and generated artifacts
+just rate-design  # design metrics → .refactor/ (report only)
+just refactor     # prepare a refactoring session
+${_docs_gate}just check        # ${_check_desc}
+just fix          # auto-fix formatting and lint issues
+\`\`\`
+
+## Conventions
+
+- **Python version:** ${_py_version}
+- **Typing:** Strict — public functions must have type annotations
+- **Docstrings:** Google style
+- **Imports:** Sorted by ruff (isort-compatible)
+- **Line length:** 120 characters
+
+## Versioning
+
+Never edit version numbers manually. Use:
+
+\`\`\`bash
+just bump patch   # bugfix: 0.1.0 → 0.1.1
+just bump minor   # feature: 0.1.1 → 0.2.0
+just bump major   # breaking: 0.2.0 → 1.0.0
+\`\`\`
+
+See [AGENTS.md](AGENTS.md) for AI agent guidelines.
+PYINIT_CONTRIBUTING
+
+        cat > LICENSE <<PYINIT_LICENSE
+MIT License
+
+Copyright (c) $(date +%Y) $(git config user.name 2>/dev/null || echo "Project Author")
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+PYINIT_LICENSE
+
+        # ─── Step 14: pre-commit ───────────────────────────────────────────────
+        cat > .pre-commit-config.yaml <<'PYINIT_PRECOMMIT'
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --force-exclude
+        language: system
+        types_or: [python, pyi]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+# Note: basedpyright runs in `just check` and CI, not as a pre-commit hook.
+PYINIT_PRECOMMIT
+
+        # ─── Step 15: documentation (lib: MkDocs; app --cli: CLI reference) ───
+        if [[ "$_type" == "lib" ]]; then
+            cat > mkdocs.yml <<PYINIT_MKDOCS
+site_name: ${PROJECT_NAME}
+site_description: Documentation for ${PROJECT_NAME}
+repo_url: https://github.com/YOUR_ORG/${PROJECT_NAME}
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - toc.integrate
+    - search.suggest
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+
+nav:
+  - Home: index.md
+  - API Reference: api.md
+PYINIT_MKDOCS
+
+            mkdir -p docs
+            cat > docs/index.md <<PYINIT_DOCS_INDEX
+# ${PROJECT_NAME}
+
+## Getting Started
+
+\`\`\`bash
+uv sync
+just check
+\`\`\`
+
+## Installation
+
+\`\`\`bash
+pip install ${PROJECT_NAME}
+\`\`\`
+
+## Quick Start
+
+\`\`\`python
+import ${PACKAGE_NAME}
+\`\`\`
+PYINIT_DOCS_INDEX
+
+            cat > docs/api.md <<PYINIT_DOCS_API
+# API Reference
+
+::: ${PACKAGE_NAME}
+PYINIT_DOCS_API
+
+            cat >> Justfile <<'PYINIT_JUST_DOCS'
+
+# Build documentation
+docs:
+    uv run mkdocs build
+
+# Verify the documentation builds strictly (part of `just check`)
+docs-check:
+    uv run mkdocs build --strict
+
+# Serve documentation locally (with live reload)
+docs-serve:
+    uv run mkdocs serve
+PYINIT_JUST_DOCS
+        elif [[ "$_type" == "app" && $_cli -eq 1 ]]; then
+            mkdir -p scripts docs/reference
+            cat > scripts/gen_cli_docs.py <<'PYINIT_CLI_DOCS'
+"""Regenerate or verify ``docs/reference/cli.md`` from the Typer application.
+
+The CLI reference is a generated artifact: the source of truth is the Typer app
+in ``src/@PACKAGE@/cli.py`` and its help texts. This script runs Typer's own
+documentation generator,
+prepends the "do not edit" header and writes ``docs/reference/cli.md`` in place.
+
+Run it through ``just docs`` (write) or ``just docs-check`` (verify only). Never
+edit the output by hand.
+"""
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+OUTPUT = REPO_ROOT / "docs" / "reference" / "cli.md"
+
+HEADER = """<!-- Generated file. Do not edit by hand. -->
+<!-- Source: src/@PACKAGE@/cli.py. Regenerate with: just docs -->
+
+"""
+
+
+def build_document() -> str:
+    """Return the full CLI reference (header plus generated body) as text."""
+    command = [
+        sys.executable,
+        "-m",
+        "typer",
+        "@PACKAGE@.cli",
+        "utils",
+        "docs",
+        "--name",
+        "@PROJECT@",
+        "--title",
+        "CLI reference",
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr)
+        raise SystemExit(f"typer docs generation failed with exit code {result.returncode}")
+
+    body = result.stdout.rstrip("\n") + "\n"
+    return HEADER + body
+
+
+def main() -> None:
+    """Write ``docs/reference/cli.md`` or, with ``--check``, verify it is current."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="do not write; fail if the committed page differs from the generated one",
+    )
+    arguments = parser.parse_args()
+
+    relative = OUTPUT.relative_to(REPO_ROOT)
+    content = build_document()
+
+    if arguments.check:
+        current = OUTPUT.read_text(encoding="utf-8") if OUTPUT.exists() else ""
+        if current != content:
+            raise SystemExit(f"{relative} is out of date; run `just docs`.")
+        print(f"{relative} is up to date.")
+        return
+
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT.write_text(content, encoding="utf-8")
+    print(f"Wrote {relative}")
+
+
+if __name__ == "__main__":
+    main()
+PYINIT_CLI_DOCS
+            sed -i "s/@PACKAGE@/${PACKAGE_NAME}/g; s/@PROJECT@/${PROJECT_NAME}/g" scripts/gen_cli_docs.py \
+                || _die "parameterising scripts/gen_cli_docs.py failed"
+
+            cat >> Justfile <<'PYINIT_JUST_CLI_DOCS'
+
+# Regenerate docs/reference/cli.md from the Typer app
+docs:
+    uv run python scripts/gen_cli_docs.py
+
+# Verify docs/reference/cli.md matches the Typer app (no write; part of `just check`)
+docs-check:
+    uv run python scripts/gen_cli_docs.py --check
+PYINIT_JUST_CLI_DOCS
+        fi
+
+        # ─── Step 16: git init ────────────────────────────────────────────────
+        git init -q -b main || _die "git init failed"
+
+        # ─── Step 17: sync, hooks, and quality gate ───────────────────────────
+        uv sync || _die "uv sync failed"
+        uv run pre-commit install || _die "pre-commit install failed"
+        if [[ "$_type" == "lib" || $_cli -eq 1 ]]; then
+            just docs || _die "documentation generation failed"
+        fi
+        just check || _die "just check failed"
+    )
+
+    local _rc=$?
+
+    if [[ $_rc -eq 0 ]]; then
+        if [[ "$_dir" != "." ]]; then
+            cd "$_dir" || return 1
+        fi
+        echo ""
+        echo -e "\e[32m✨ Success! Project '$_target_name' is ready.\e[0m"
+        echo ""
+        echo "  Next steps:"
+        echo "  1. direnv allow      # activate the .venv automatically"
+        if [[ "$_type" == "app" ]]; then
+            echo "  2. just run          # run the application"
+            echo "  3. just test         # run tests"
+        else
+            echo "  2. just test         # run tests"
+            echo "  3. just docs         # build documentation"
+        fi
+        echo "  4. just check        # full quality gate"
+        echo ""
+        echo "  To release:"
+        echo "  just bump patch"
+        echo "  git push origin main --tags"
+        return 0
+    fi
+
+    echo "Note: a partially initialized project may remain in '$_dir'." >&2
+    return 1
+}
+
+
+
+
+# ─── jupyter-launcher ─────────────────────────────────────────────────────────
+# Flexible Jupyter Lab launcher with optional Colab integration and port selection.
+#
+# Usage: jupyter-launcher [-n] [-c] [-p PORT] [folder]
+#
+#   -n          Tokenless mode: disables password/token authentication.
+#               Useful for local development or when Google Colab should connect
+#               without a token.
+#
+#   -c          Colab mode: adds the Google Colab CORS/XSRF arguments so that
+#               colab.research.google.com can connect to this local server.
+#               Can be combined with -n (token is then also disabled).
+#
+#   -p PORT     Use an alternative port instead of the default 8888.
+#               Example: jupyter-launcher -p 9999
+#
+#   folder      Optional path to use as the notebook directory (--notebook-dir).
+#               Use '.' to refer to the current working directory.
+#               If omitted, ~/labor is used as the default.
+#
+# Examples:
+#   jupyter-launcher                     # default: port 8888, ~/labor, token required
+#   jupyter-launcher -n                  # tokenless, ~/labor
+#   jupyter-launcher -c                  # Colab-compatible, ~/labor, token required
+#   jupyter-launcher -n -c              # tokenless + Colab-compatible, ~/labor
+#   jupyter-launcher -n -c .            # tokenless + Colab, current directory
+#   jupyter-launcher -p 9999 myproject  # custom port, ./myproject as notebook-dir
+#   jupyter-launcher -n -c -p 9999 .   # all options combined
+#
+# Personal alias suggestion: alias jl='jupyter-launcher -n -c'
+jupyter-launcher() {
+
+    # ─── FLAG ARGUMENT DOCUMENTATION ──────────────────────────────────────────
+    # --no-browser
+    #     Prevents Jupyter from automatically opening a browser window on start.
+    #
+    # --ip=127.0.0.1
+    #     Binds the server strictly to localhost (security: not reachable from LAN).
+    #
+    # --port=PORT
+    #     Sets the port for the local Jupyter instance (default: 8888).
+    #
+    # --ServerApp.port_retries=0
+    #     Aborts immediately if the chosen port is already in use, instead of
+    #     silently falling back to the next port (e.g. 8889). This prevents
+    #     accidental multi-instance confusion.
+    #
+    # --notebook-dir=PATH
+    #     Sets the root directory shown in the Jupyter file browser.
+    #
+    # ─── BUGFIX: FILE-ID ERRORS AND INFINITE LOOPS ────────────────────────────
+    # --YDocExtension.disable_rtc=True
+    #     Disables Real-Time Collaboration (RTC). Without this, JupyterLab enters
+    #     a 404 loop trying to open the "globalAwareness" room, which blocks the
+    #     server. Safe to disable when collaboration is not needed.
+    #     NOTE: To prevent WebSocket crashes with Google Colab (TypeError on strings),
+    #     the underlying server extensions (jupyter_server_documents and 
+    #     jupyter_server_ydoc) are globally disabled via ~/.jupyter/jupyter_server_config.json
+    #     during the initial Mamba system setup.
+    #
+    # --FileIdManager.file_id_manager_class=jupyter_server.fileid.manager.ArbitraryFileIdManager
+    #     Fixes the recurring "File ID error". By default Jupyter uses a local
+    #     SQLite database for file IDs which frequently gets corrupted or loses
+    #     track of paths. The ArbitraryFileIdManager keeps IDs in memory only -
+    #     files can be opened again without DB corruption issues.
+    #
+    # ─── GOOGLE COLAB INTEGRATION (only when -c is set) ───────────────────────
+    # --ServerApp.allow_origin='https://colab.research.google.com'
+    #     Allows Colab to access this local server via CORS.
+    #
+    # --ServerApp.allow_remote_access=True
+    #     Required for any external origin to be permitted at all.
+    #
+    # --ServerApp.disable_check_xsrf=True
+    #     Prevents the server from treating Colab requests as malicious
+    #     cross-site request forgery (XSRF) attacks.
+    #
+    # ─── TOKENLESS MODE (only when -n is set) ─────────────────────────────────
+    # --ServerApp.token=''
+    #     Disables the password/token prompt entirely.
+    #
+    # --ServerApp.allow_credentials=True
+    #     Required when Colab (or any client) needs to connect without a token.
+    # ──────────────────────────────────────────────────────────────────────────
+
+    # ── Default values for all configurable options ───────────────────────────
+    local _jl_tokenless=0      # -n flag: 1 = disable token authentication
+    local _jl_colab=0          # -c flag: 1 = add Colab CORS/XSRF arguments
+    local _jl_port="8888"      # -p PORT: port number (default 8888)
+    local _jl_folder=""        # positional: notebook-dir path (empty = use default)
+
+    # ── Parse optional flags with getopts ─────────────────────────────────────
+    # getopts processes flags one at a time; OPTIND tracks the position so we
+    # can shift to the remaining positional argument (the optional folder) afterward.
+    local OPTIND=1
+    local _jl_opt
+    while getopts ":ncp:" _jl_opt; do
+        case "$_jl_opt" in
+            n)
+                # Tokenless mode: no password/token required
+                _jl_tokenless=1
+                ;;
+            c)
+                # Colab mode: enable Google Colab CORS/XSRF arguments
+                _jl_colab=1
+                ;;
+            p)
+                # Custom port: OPTARG holds the value that follows -p
+                _jl_port="$OPTARG"
+                ;;
+            :)
+                # A flag that requires an argument was given without one (e.g. -p with no number)
+                echo "jupyter-launcher: option -${OPTARG} requires an argument." >&2
+                return 1
+                ;;
+            \?)
+                # An unknown flag was passed; print usage hint and abort
+                echo "jupyter-launcher: unknown option -${OPTARG}." >&2
+                echo "Usage: jupyter-launcher [-n] [-c] [-p PORT] [folder]" >&2
+                return 1
+                ;;
+        esac
+    done
+
+    # Shift past the flags so that "$1" now refers to the optional folder argument
+    shift $(( OPTIND - 1 ))
+
+    # ── Resolve the notebook directory ────────────────────────────────────────
+    if [[ $# -ge 1 ]]; then
+        # A folder argument was provided. '.' is explicitly valid and resolves to
+        # the current working directory via pwd.
+        if [[ "$1" == "." ]]; then
+            _jl_folder="$(pwd)"
+        else
+            # Expand to an absolute path so Jupyter always sees a clean path,
+            # regardless of how the user typed it (relative or absolute).
+            _jl_folder="$(realpath -m "$1")"
+        fi
+        # Create the directory if it does not exist yet, so Jupyter does not error.
+        mkdir -p "$_jl_folder"
+    else
+        # No folder argument: fall back to the standard workspace directory.
+        _jl_folder="$HOME/labor"
+        mkdir -p "$_jl_folder"
+    fi
+
+    # ── Build the argument list incrementally ─────────────────────────────────
+    # Using an array avoids quoting pitfalls and makes conditional flag injection
+    # clean and readable.
+    local -a _jl_args=(
+        --no-browser
+        --ip=127.0.0.1
+        "--port=${_jl_port}"
+        --ServerApp.port_retries=0
+        "--notebook-dir=${_jl_folder}"
+        # Disable real-time collaboration to prevent the globalAwareness 404 loop
+        --YDocExtension.disable_rtc=True
+        # Use in-memory file ID manager to avoid SQLite corruption errors
+        --FileIdManager.file_id_manager_class=jupyter_server.fileid.manager.ArbitraryFileIdManager
+    )
+
+    # ── Conditionally append tokenless-mode arguments ─────────────────────────
+    if [[ $_jl_tokenless -eq 1 ]]; then
+        _jl_args+=(
+            --ServerApp.token=''
+            # allow_credentials is required for credential-bearing requests (e.g. from Colab)
+            --ServerApp.allow_credentials=True
+        )
+    fi
+
+    # ── Conditionally append Colab-integration arguments ──────────────────────
+    if [[ $_jl_colab -eq 1 ]]; then
+        _jl_args+=(
+            # Grant Colab cross-origin access to this local server
+            "--ServerApp.allow_origin=https://colab.research.google.com"
+            --ServerApp.allow_remote_access=True
+            # Disable XSRF check so Colab requests are not rejected as attacks
+            --ServerApp.disable_check_xsrf=True
+        )
+    fi
+
+    # ── Print a summary so the user knows exactly what will start ─────────────
+    echo "Starting Jupyter Lab:"
+    echo "  notebook-dir : $_jl_folder"
+    echo "  port         : $_jl_port"
+    echo "  tokenless    : $([ $_jl_tokenless -eq 1 ] && echo yes || echo no)"
+    echo "  colab mode   : $([ $_jl_colab    -eq 1 ] && echo yes || echo no)"
+    echo ""
+
+    # ─── Launch Jupyter with the assembled argument list ───────────────────────
+    jupyter lab "${_jl_args[@]}"
+}
+
+# Standard alias for quick access (tokenless + Colab mode, default directory)
+alias jl='jupyter-launcher -n -c'
