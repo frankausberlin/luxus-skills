@@ -1381,3 +1381,68 @@ jupyter-launcher() {
 
 # Standard alias for quick access (tokenless + Colab mode, default directory)
 alias jl='jupyter-launcher -n -c'
+
+
+
+
+
+# ─── Custom Jupyter P10k Segment (Passive Runtime Tracker) ────────────────────
+# otptional: info is folder a jupyter runtime-folder in p10k prompt
+# insert in ~/.p10k.zsh to the list of segments in POWERLEVEL9K_RIGHT_PROMPT_ELEMENTS 
+# without 'prompt_', just 'my_jupyter'
+function prompt_my_jupyter() {
+  # Where Jupyter on Linux logs its active server processes
+  local runtime_dir="${XDG_DATA_HOME:-$HOME/.local/share}/jupyter/runtime"
+  # Find all server JSONs (the '(N)' prevents errors if none exist)
+  local json_files=("$runtime_dir"/(jpserver|nbserver)-*.json(N))
+  # If no JSON files at all -> abort immediately (costs 0 performance)
+  if (( ${#json_files} == 0 )); then
+    return
+  fi
+
+  local is_jupyter_dir=false
+  local active_dirs=()
+
+  # Check each JSON file: only consider a live Jupyter server process
+  local json_file
+  local pid
+  local process_args
+  local server_dir
+  for json_file in "${json_files[@]}"; do
+    # Extract PID from filename (e.g. jpserver-17343.json -> 17343)
+    pid="${json_file##*-}"
+    pid="${pid%.json}"
+    # Verify the process is still running (kill -0 returns 0 if alive)
+    if kill -0 "$pid" 2>/dev/null; then
+      # A stale runtime file can point to an unrelated process after PID reuse.
+      process_args=$(ps -p "$pid" -o args= 2>/dev/null)
+      if [[ "$process_args" != *jupyter* && "$process_args" != *notebook* ]]; then
+        continue
+      fi
+
+      # Read root_dir from this active server
+      server_dir=$(grep -o '"root_dir"[[:space:]]*:[[:space:]]*"[^\}]*"' "$json_file" 2>/dev/null | head -1 | cut -d'"' -f4)
+      if [[ -n "$server_dir" ]]; then
+        active_dirs+=("$server_dir")
+      fi
+    fi
+  done
+
+  # If no active servers remain after PID check -> abort
+  if (( ${#active_dirs} == 0 )); then
+    return
+  fi
+
+  # Check whether the current directory ($PWD) is a (sub)folder of an active server
+  for server_dir in "${active_dirs[@]}"; do
+    if [[ "$PWD" == "$server_dir" || "$PWD" == "$server_dir/"* ]]; then
+      is_jupyter_dir=true
+      break
+    fi
+  done
+
+  # Hit! Active server is running and we are within its sphere of influence.
+  if $is_jupyter_dir; then
+    p10k segment -f 208 -i '' -t 'jupyter'
+  fi
+}
