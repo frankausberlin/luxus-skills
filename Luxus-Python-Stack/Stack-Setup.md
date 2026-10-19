@@ -188,7 +188,6 @@ sudo nala update && sudo nala install -y code
 # 4. Kilo Code Extension & Python
 code --install-extension kilocode.kilo-code
 code --install-extension ms-python.python
-
 ```
 
 ## Github:
@@ -264,7 +263,7 @@ Important notes on the Mamba level:
 - **The rule is: no updates, just delete and recreate.** Only in this way can the dependency conflicts eliminated.
 
 
-## pyinit, jupyter-launcher (jl), myprompt_my_jupyter (p10k) from Luxus Python Stack
+## Luxus Python Stack: pyinit, jupyter-launcher (jl), myprompt_my_jupyter (p10k)
 ```shell
 # load functions
 cat << 'EOF' >> ~/.zshrc
@@ -273,7 +272,13 @@ source ~/gits/luxus-skills/Luxus-Python-Stack/luxuspythonstack.sh
 EOF
 
 # insert the jupyter-prompt-element in .p10k.zsh
-sed -i '/^[[:space:]]*anaconda/a \    my_jupyter              # custom jupyter segment (see prompt_my_jupyter function below)' ~/.p10k.zsh
+sed -i '/^[[:space:]]*anaconda/a \    my_jupyter              # custom jupyter segment (see prompt_my_jupyter function in luxuspythonstack.sh)' ~/.p10k.zsh
+
+# make skill accessable
+mkdir -p ~/.agents/skills/
+ln -s ~/gits/luxus-skills/Luxus-Python-Stack/lupysta ~/.agents/skills/lupysta
+
+exec zsh
 ```
 
 
